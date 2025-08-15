@@ -181,6 +181,15 @@ for si = 1:numel(filelist)
 	cfg.headmodel = headmodel;
 	sourceBroad = ft_sourceanalysis(cfg, timelockBroad);
 
+	% Extract channel labels used to build the common filter
+	if isfield(sourceBroad, 'label')
+		filterLabels = sourceBroad.label;
+	elseif isfield(sourceBroad, 'cfg') && isfield(sourceBroad.cfg, 'channel')
+		filterLabels = sourceBroad.cfg.channel;
+	else
+		filterLabels = timelockBroad.label; % fallback
+	end
+
 	% Power per frequency band using the common filter
 	for bi = 1:size(freqBands, 1)
 		band = freqBands(bi, :);
@@ -198,6 +207,11 @@ for si = 1:numel(filelist)
 		cfg.covariancewindow = 'all';
 		tlBand = ft_timelockanalysis(cfg, dataBand);
 
+		% Align band-limited data channel order to the common filter labels
+		cfg = [];
+		cfg.channel = filterLabels;
+		tlBand = ft_selectdata(cfg, tlBand);
+
 		% Apply common filter to band-limited data
 		cfg = [];
 		cfg.method = 'lcmv';
@@ -209,6 +223,7 @@ for si = 1:numel(filelist)
 		cfg.lcmv.weightnorm = 'arraygain';
 		cfg.headmodel = headmodel;
 		cfg.sourcemodel = sourceBroad; % reuse common filters
+		cfg.channel = filterLabels;    % must match sourcemodel.label
 		sourceBand = ft_sourceanalysis(cfg, tlBand);
 
 		% Plot orthogonal slices at global maximum power
