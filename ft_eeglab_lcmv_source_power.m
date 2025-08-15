@@ -168,6 +168,15 @@ for si = 1:numel(filelist)
 	cfg.sourcemodel = sourcemodel;
 	lf = ft_prepare_leadfield(cfg, timelockBroad);
 
+	% Ensure the leadfield carries an explicit, canonical channel list
+	if ~isfield(lf, 'label') || isempty(lf.label)
+		lf.label = timelockBroad.label;
+	end
+	if isstring(lf.label)
+		lf.label = cellstr(lf.label);
+	end
+	lf.label = lf.label(:);
+
 	% LCMV common spatial filter on broadband
 	cfg = [];
 	cfg.method = 'lcmv';
@@ -181,14 +190,21 @@ for si = 1:numel(filelist)
 	cfg.headmodel = headmodel;
 	sourceBroad = ft_sourceanalysis(cfg, timelockBroad);
 
-	% Extract channel labels used to build the common filter
-	if isfield(sourceBroad, 'label')
-		filterLabels = sourceBroad.label;
-	elseif isfield(sourceBroad, 'cfg') && isfield(sourceBroad.cfg, 'channel')
-		filterLabels = sourceBroad.cfg.channel;
+	% Build a sourcemodel with common filters and correct channel labels
+	lfFilter = lf;
+	if isfield(sourceBroad, 'avg') && isfield(sourceBroad.avg, 'filter')
+		lfFilter.filter = sourceBroad.avg.filter;
+		lfFilter.avg = struct();
+		lfFilter.avg.filter = sourceBroad.avg.filter; % also store where FieldTrip expects it
 	else
-		filterLabels = timelockBroad.label; % fallback
+		error('Common LCMV filters not found in sourceBroad.avg.filter');
 	end
+	if isfield(sourceBroad, 'inside'); lfFilter.inside = sourceBroad.inside; end
+	if isfield(sourceBroad, 'pos'); lfFilter.pos = sourceBroad.pos; end
+
+	% Canonical channel list used for filters and all subsequent analyses
+	chanList = lf.label;
+	lfFilter.label = chanList;
 
 	% Power per frequency band using the common filter
 	for bi = 1:size(freqBands, 1)
@@ -207,11 +223,17 @@ for si = 1:numel(filelist)
 		cfg.covariancewindow = 'all';
 		tlBand = ft_timelockanalysis(cfg, dataBand);
 
-		% Align band-limited data channel order to the common filter labels
+		% Compute canonical channel selection order consistent with FieldTrip
+		canonChan = ft_channelselection(chanList, tlBand.label);
+
+		% Align band-limited data channel order to the canonical list
 		cfg = [];
-		cfg.channel = filterLabels;
+		cfg.channel = canonChan;
 		tlBand = ft_selectdata(cfg, tlBand);
 
+		% Ensure the sourcemodel and cfg use the same labels/order
+		lfFilter.label = canonChan(:);
+ 
 		% Apply common filter to band-limited data
 		cfg = [];
 		cfg.method = 'lcmv';
@@ -222,8 +244,10 @@ for si = 1:numel(filelist)
 		cfg.lcmv.projectnoise = 'yes';
 		cfg.lcmv.weightnorm = 'arraygain';
 		cfg.headmodel = headmodel;
-		cfg.sourcemodel = sourceBroad; % reuse common filters
-		cfg.channel = filterLabels;    % must match sourcemodel.label
+		cfg.sourcemodel = lfFilter; % reuse common filters with labels
+		cfg.grid = lfFilter;        % support older FT versions expecting cfg.grid
+		if isstring(canonChan); canonChan = cellstr(canonChan); end
+		cfg.channel = canonChan(:); % must match sourcemodel.label
 		sourceBand = ft_sourceanalysis(cfg, tlBand);
 
 		% Plot orthogonal slices at global maximum power
